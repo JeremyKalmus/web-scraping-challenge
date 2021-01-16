@@ -16,6 +16,7 @@ def scrape():
     import requests
     from splinter import Browser
     from webdriver_manager.chrome import ChromeDriverManager
+    import pymongo
     #scrape news
     url = 'https://mars.nasa.gov/news'
     response = requests.get(url)
@@ -31,55 +32,101 @@ def scrape():
 
 
     #scrape for image
+
     executable_path = {'executable_path': ChromeDriverManager().install()}
     browser = Browser('chrome', **executable_path, headless=False)
-
     url = 'https://www.jpl.nasa.gov/spaceimages/?search=&category=Mars'
+
     browser.visit(url)
     html = browser.html
     soup = bs(html, 'html.parser')
 
-    footer = soup.find('footer')
-    for a  in footer.find_all('a'):
-        featured_image = a['data-fancybox-href']
-        featured_image_url = f'https://www.jpl.nasa.gov/{featured_image}'
-    browser.quit()
+    browser.find_by_css('div[class="NavDesktopDropdown -active"]')[0].click()
+    browser.click_link_by_partial_text('Featured Image')
+
+    html = browser.html
+    soup = bs(html, 'html.parser')
+    main = soup.find('main')
+    img = main.find('img')
+    featured_image_url = img['src']
+
+
+
+
+    
 
 
     #scrape for facts
     url = 'https://space-facts.com/mars/'
-    mars_data_table = pd.read_html(url, header=0)
+    mars_data_table = pd.read_html(url, header=None)
     mars_data_table = mars_data_table[0]
+    mars_data_table = mars_data_table.rename(columns={0:'Description',1: 'Mars'})
     mars_data_html = mars_data_table.to_html()
 
     # scrape hemi-info
-    hemi_list = ['Cerberus', 'Schiaparelli', 'Syrtis_Major', 'Valles_Marineris']
-    hemi = 'Cerberus'
+    url = 'https://astrogeology.usgs.gov/search/results?q=hemisphere+enhanced&k1=target&v1=Mars'
+    
+    browser.visit(url)
+    html = browser.html
+    soup = bs(html, 'html.parser')
+
+    url_list = []
+    hemi_list = []
+
+    items = soup.find_all('div', class_='description')
+
+    for item in items:
+        a = item.find('a', class_='itemLink')
+        hemi = a.text.strip()
+        hemi_list.append(hemi)
+        url = item.find('a')['href']
+        url_list.append(url)
+
+
+    hemi_list = [i.split(' Enhanced',1)[0] for i in hemi_list]
+
+    orignial_img_list = []
+
+    for url in url_list:
+        browser.visit(f"https://astrogeology.usgs.gov/{url}")
+        html = browser.html
+        soup = bs(html, 'html.parser')
+        downloads = soup.find_all('li')
+        temp_list = []
+        for download in downloads:
+            orignial_img = download.find('a')['href']
+            temp_list.append(orignial_img)
+        
+        orignial_img_list.append(temp_list[1]) 
+
     hemisphere_image_urls = []
 
-    for hemi in hemi_list:
-        hemi_url = f'https://astrogeology.usgs.gov/search/map/Mars/Viking/{hemi}_enhanced'
-        response = requests.get(hemi_url)
-        soup = bs(response.text, 'html.parser')
+    browser.quit()
 
-        downloads = soup.find('div', class_="downloads" )
-        images_list = downloads.find_all('li')[1]
-        for a in images_list.find_all('a'):
-            img_url = a['href']
-            title = f'{hemi} Hemisphere'
-            title = title.replace('_', ' ')
-            image_dict = {'title': title, 'img_url':img_url}
-        hemisphere_image_urls.append(image_dict)    
+    for i in range(0,4,1):
+        temp_dict = {'title': hemi_list[i], 'img_url': orignial_img_list[i]}
+        hemisphere_image_urls.append(temp_dict)
 
+    #put all results in list of dict
+    mars_dict = [
+        {'Recent_News':news_title, 'News_Story':news_p }, 
+        {'Featured_Image':featured_image_url}, 
+        {'Mars_Data': mars_data_html}, 
+        {'Mars_Hemispheres': hemisphere_image_urls}
+    ]
+    
+    
+    conn = "mongodb://localhost:27017"
+    client = pymongo.MongoClient(conn)
+    db = client.mars_db 
+    mars_collection = db.mars_collection
 
-    #put all results in dict
-    mars_dict = {
-        {'Recent News':news_title, 'News Story':news_p }, 
-        {'Featured Image':featured_image_url}, 
-        {'Mars Data': mars_data_html}, 
-        {'Mars Hemisphers': hemisphere_image_urls}
-    }
-    return mars_dict
+    mars_collection.insert_many(
+        mars_dict
+    )
+
+    print('Mars Data Uploaded')
+
 
 
 # %%
